@@ -1,0 +1,23 @@
+{
+    "sinkType": "mariadb", # "mariadb", "json", "csv" 
+    "connection": {
+        "host": "host", #server/host address
+        "port": 0, #port number
+        "username": "username", #database username
+        "password": "password", #database password
+        "database": "databasename", #database name
+        "outputFileLocation": "/home/username",  # full path to output file location
+        "outputFileName": "twowBank" # name of the output file, without extension
+    },
+    "wowInfo": {
+        "wowAccountAddonVariablePath": "/media/username/drive/twowfolder/twmoa_1172/twmoa_1172/WTF/Account", # path to the WoW account folder
+        "realmName": "Nordanaar", # realm name
+        "wowAccountsToCheck": { # key = account name, value = list of characters. Empty list means all characters tied to that account
+            "AccountOne": ["Char1", "Char2"],
+            "AccountTwo": ["Char1", "Char2"],
+            "AccountThree": [""]
+        }
+    }
+    
+    
+}
