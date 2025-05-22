@@ -1,0 +1,8 @@
+## Interface: 11200
+## Title: bankContentExtractor
+## Notes: Extracts bank content and saves it to a file (saved variables).
+## Author: Snoker
+## Version: 1.0
+## SavedVariablesPerCharacter: MyBankData
+
+bankContentExtractor.lua
