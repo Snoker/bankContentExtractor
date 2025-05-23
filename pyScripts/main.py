@@ -1,14 +1,25 @@
 import json
 import re
+import logging
+import mariadb
+import csv
+import sys
+
 from pathlib import Path
 from typing import Optional, Tuple, List, Dict
 from slpp import slpp as lua
 from collections import defaultdict
-import logging
-import mariadb
-import csv
 
-logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+
+def configureLogging():
+    if "--debug" in sys.argv:
+        level = logging.DEBUG
+    elif "--info" in sys.argv:
+        level = logging.INFO
+    else:
+        level = logging.ERROR
+
+    logging.basicConfig(level=level, format='%(levelname)s: %(message)s')
 
 class WowBankExtractor:
     def __init__(self, configPath: str):
@@ -74,8 +85,8 @@ class WowBankExtractor:
 
         luaTableString = match.group(1)
         data = lua.decode(luaTableString)
-        if not data:
-            raise ValueError(f"Failed to decode Lua variable '{self.savedVariableName}' in file {filePath}")
+        if not isinstance(data, dict):
+            raise ValueError(f"Decoded Lua variable '{self.savedVariableName}' is not a dictionary in file {filePath}")
 
         return data
 
@@ -130,33 +141,28 @@ class WowBankExtractor:
         return aggregatedData
 
 
+class BankDataSink:
+    def __init__(self, sinkType: str, connection: dict):
+        self.sinkType = sinkType
+        self.connection = connection
+        self.fieldNames = ["account", "charName", "bagId", "itemId", "itemName", "itemCount"]
 
-def validateSinkType(sinkType: str) -> bool:
-    validSinkTypes = ["mariadb", "csv", "json"]
-    if sinkType not in validSinkTypes:
-        raise ValueError(f"Invalid sink type '{sinkType}'. Valid options are: {validSinkTypes}")
-    return True
+    def write(self, finalData: dict) -> None:
+        if self.sinkType == "mariadb":
+            self._writeToMariaDb(finalData)
+        elif self.sinkType == "csv":
+            self._writeToCsv(finalData)
+        elif self.sinkType == "json":
+            self._writeToJson(finalData)
+        else:
+            raise ValueError(f"Unsupported sink type '{self.sinkType}'.")
 
-
-
-if __name__ == "__main__":
-    extractor = WowBankExtractor("conf.json")
-    finalData = extractor.extract()
-
-    configFile = "conf.json"
-    configPath = Path(configFile)
-    with configPath.open("r", encoding="utf-8") as f:
-        configData = json.load(f)
-    sinkType = configData.get("sinkType", "json")
-    validateSinkType(sinkType)
-    connection = configData.get("connection", {})
-
-    if sinkType == "mariadb":
-        host = connection.get("host", "localhost")
-        port = connection.get("port", 3306)
-        username = connection.get("username", "")
-        password = connection.get("password", "")
-        database = connection.get("database", "")
+    def _writeToMariaDb(self, finalData: dict) -> None:
+        host = self.connection.get("host", "localhost")
+        port = self.connection.get("port", 3306)
+        username = self.connection.get("username", "")
+        password = self.connection.get("password", "")
+        database = self.connection.get("database", "")
 
         if not all([host, port, username, password, database]):
             raise ValueError("Incomplete MySQL connection details in the configuration.")
@@ -173,43 +179,97 @@ if __name__ == "__main__":
         except mariadb.Error as err:
             logging.error(f"Error connecting to MySQL: {err}")
             raise
-        cursor = dbConnection.cursor()
-        cursor.execute("CREATE TABLE IF NOT EXISTS bank_items (account VARCHAR(255), charName VARCHAR(255), bagId INT, itemId INT, itemName VARCHAR(255), itemCount INT)")
-        cursor.execute("TRUNCATE TABLE bank_items")
-        for account, items in finalData.items():
-            for item in items:
-                cursor.execute(
-                    "INSERT INTO bank_items (account, charName, bagId, itemId, itemName, itemCount) VALUES (?, ?, ?, ?, ?, ?)",
-                    (account, item.get("charName"), item.get("bagId"), item.get("itemId"), item.get("itemName"), item.get("itemCount"))
+
+        cursor = None
+        try:
+            cursor = dbConnection.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS bank_items (
+                    account VARCHAR(255),
+                    charName VARCHAR(255),
+                    bagId INT,
+                    itemId INT,
+                    itemName VARCHAR(255),
+                    itemCount INT
                 )
-        dbConnection.commit()
-        cursor.close()
-        dbConnection.close()
-        logging.info("Data successfully inserted into the MySQL database.")
-    elif sinkType == "csv":
-        outputFile = connection.get("outputFileName", "bank_items.csv")
-        outputFileLocation = connection.get("outputFileLocation", ".")
-        outputFile = Path(outputFileLocation) / f"{outputFile}.csv"
-        with open(outputFile, "w", newline="", encoding="utf-8") as csvfile:
-            fieldnames = ["account", "charName", "bagId", "itemId", "itemName", "itemCount"]
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            """)
+            cursor.execute("TRUNCATE TABLE bank_items")
+            for account, items in finalData.items():
+                for item in items:
+                    cursor.execute("""
+                        INSERT INTO bank_items (account, charName, bagId, itemId, itemName, itemCount)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (
+                        account,
+                        item.get("charName"),
+                        item.get("bagId"),
+                        item.get("itemId"),
+                        item.get("itemName"),
+                        item.get("itemCount")
+                    ))
+            dbConnection.commit()
+            logging.info("Data successfully inserted into the MySQL database.")
+        finally:
+            if cursor is not None:
+                cursor.close()
+            dbConnection.close()
+
+    def _writeToCsv(self, finalData: dict) -> None:
+        outputFileName = self.connection.get("outputFileName", "bank_items.csv")
+        outputFileLocation = self.connection.get("outputFileLocation", ".")
+        outputPath = Path(outputFileLocation) / f"{outputFileName}.csv"
+
+        with outputPath.open("w", newline="", encoding="utf-8") as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=self.fieldNames)
             writer.writeheader()
             for account, items in finalData.items():
                 for item in items:
                     writer.writerow({
                         "account": account,
-                        **{k: item[k] for k in fieldnames[1:]}
+                        **{k: item[k] for k in self.fieldNames[1:]}
                     })
-        logging.info(f"Data successfully written to {outputFile}.")
-    elif sinkType == "json":
-        outputFile = connection.get("outputFileName", "bank_items.json")
-        outputFileLocation = connection.get("outputFileLocation", ".")
-        outputFile = Path(outputFileLocation) / f"{outputFile}.json"
-        with open(outputFile, "w", encoding="utf-8") as jsonfile:
+        logging.info(f"Data successfully written to {outputPath}.")
+
+    def _writeToJson(self, finalData: dict) -> None:
+        outputFileName = self.connection.get("outputFileName", "bank_items.json")
+        outputFileLocation = self.connection.get("outputFileLocation", ".")
+        outputPath = Path(outputFileLocation) / f"{outputFileName}.json"
+
+        with outputPath.open("w", encoding="utf-8") as jsonfile:
             json.dump(finalData, jsonfile, ensure_ascii=False, indent=4)
-        logging.info(f"Data successfully written to {outputFile}.")
-    else:
-        raise ValueError(f"Unsupported sink type '{sinkType}'.")
-    logging.info("Extraction and processing completed.")
-    logging.info("Exiting program.")
-    exit(0)
+        logging.info(f"Data successfully written to {outputPath}.")
+
+
+
+def validateSinkType(sinkType: str) -> bool:
+    validSinkTypes = ["mariadb", "csv", "json"]
+    if sinkType not in validSinkTypes:
+        raise ValueError(f"Invalid sink type '{sinkType}'. Valid options are: {validSinkTypes}")
+    return True
+
+
+if __name__ == "__main__":
+    try:
+        configureLogging()
+        # Extract data from WoW addon saved variables
+        extractor = WowBankExtractor("conf.json")
+        finalData = extractor.extract()
+
+        # Write data to the specified sink
+        configFile = "conf.json"
+        configPath = Path(configFile)
+        with configPath.open("r", encoding="utf-8") as f:
+            configData = json.load(f)
+
+        sinkType = configData.get("sinkType", "json")
+        validateSinkType(sinkType)
+        connection = configData.get("connection", {})
+
+        sinker = BankDataSink(sinkType, connection)
+        sinker.write(finalData)
+
+        logging.info("Extraction and processing completed.")
+        logging.info("Exiting program.")
+    except Exception as e:
+        logging.error(f"Fatal error: {e}")
+        sys.exit(1)
