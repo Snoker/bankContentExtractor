@@ -1,9 +1,8 @@
 local function SaveBankContents(data)
-    MyBankData = data or {}  -- Save the passed-in table or empty table
+    MyBankData = data or {}
 end
 
 local function PrintBankContents()
-    -- Check if the bank is open
     if not BankFrame or not BankFrame:IsVisible() then
         ChatFrame1:AddMessage("|cffff0000[bankContentExtractor] Please open the bank before scanning.|r")
         return
@@ -12,7 +11,6 @@ local function PrintBankContents()
     local allItems = {}
     local charName = UnitName("player") or "Unknown"
 
-    -- Scan bank bags -1 (main bank) to 10
     for bag = -1, 10 do
         local bagSlots = GetContainerNumSlots(bag)
         if bagSlots and bagSlots > 0 then
@@ -31,7 +29,20 @@ local function PrintBankContents()
     ChatFrame1:AddMessage("---- Bank information successfully saved ----")
 end
 
-SLASH_BAGSCAN1 = "/bagscan"
-SlashCmdList["BAGSCAN"] = function()
-    PrintBankContents()
-end
+-- Initialization frame
+local initFrame = CreateFrame("Frame")
+initFrame:RegisterEvent("PLAYER_LOGIN")
+initFrame:SetScript("OnEvent", function(self, event)
+    -- Register /bagscan command
+    SLASH_BAGSCAN1 = "/bagscan" --no use atm (since runs on bank open, however I would like to run this for the future for bags only (not only when bank is open))
+    SlashCmdList["BAGSCAN"] = function()
+        PrintBankContents()
+    end
+
+    -- Register BANKFRAME_OPENED
+    local bankEventFrame = CreateFrame("Frame")
+    bankEventFrame:RegisterEvent("BANKFRAME_OPENED")
+    bankEventFrame:SetScript("OnEvent", function()
+        PrintBankContents()
+    end)
+end)
